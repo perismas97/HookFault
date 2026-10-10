@@ -1,0 +1,16 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: hookfault-backend
+  datasource:
+    url: ${HOOKFAULT_DATABASE_URL:jdbc:postgresql://localhost:5432/hookfault}
+    username: ${HOOKFAULT_DATABASE_USERNAME:hookfault}
+    password: ${HOOKFAULT_DATABASE_PASSWORD:hookfault}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
