@@ -15,7 +15,7 @@ and a Docker Compose environment.
 - Kotlin targeting Java 21
 - Spring Boot 4.1.1 with Spring JDBC and Actuator
 - PostgreSQL 16
-- Maven
+- Maven 3.9.16 via Maven Wrapper
 - Docker Compose
 
 ## Run With Docker
@@ -53,20 +53,33 @@ docker compose down
 
 Adding `-v` deletes the database volume and its data.
 
-## Build Without Docker
+## Build With Maven Wrapper
 
-Prerequisites: JDK 21 or a compatible newer JDK, and Maven 3.6.3 or newer.
-Run from the repository root:
+Requires JDK 21 or a compatible newer JDK. A separate Maven installation is not
+required: the wrapper downloads Maven 3.9.16 on first use, verifies its checksum,
+and caches it for subsequent runs. Internet access is required for the initial
+download and any uncached build dependencies.
+
+From the repository root, on Windows PowerShell:
 
 ```powershell
-mvn -f backend/pom.xml clean verify
+.\backend\mvnw.cmd -f backend/pom.xml clean verify
 ```
+
+On Linux or macOS:
+
+```sh
+./backend/mvnw -f backend/pom.xml clean verify
+```
+
+The wrapper scripts and their version configuration are in `backend/`, next to
+`pom.xml`. The Docker build uses the same wrapper and Maven version.
 
 Alternatively, run PostgreSQL in Docker and the backend with Maven:
 
 ```powershell
 docker compose up -d postgres
-mvn -f backend/pom.xml spring-boot:run
+.\backend\mvnw.cmd -f backend/pom.xml spring-boot:run
 ```
 
 Do not run the containerized backend at the same time on port 8080.
