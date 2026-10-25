@@ -5,10 +5,8 @@ import org.junit.jupiter.api.Test
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT
-import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.boot.test.web.server.LocalServerPort
-import org.springframework.boot.testcontainers.service.connection.ServiceConnection
-import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.ConnectionCallback
 import org.springframework.jdbc.core.JdbcTemplate
 import org.testcontainers.postgresql.PostgreSQLContainer
@@ -26,6 +24,7 @@ import java.time.Duration
         "management.endpoint.health.show-components=always",
     ],
 )
+@Import(PostgresTestConfiguration::class)
 class ApplicationStartupTest @Autowired constructor(
     private val jdbcTemplate: JdbcTemplate,
     private val objectMapper: ObjectMapper,
@@ -61,13 +60,5 @@ class ApplicationStartupTest @Autowired constructor(
         val health = objectMapper.readTree(response.body())
         assertThat(health.path("status").asString()).isEqualTo("UP")
         assertThat(health.path("components").path("db").path("status").asString()).isEqualTo("UP")
-    }
-
-    @TestConfiguration(proxyBeanMethods = false)
-    class PostgresConfiguration {
-        @Bean
-        @ServiceConnection
-        fun postgres(): PostgreSQLContainer = PostgreSQLContainer("postgres:16-alpine")
-            .withDatabaseName("hookfault_test")
     }
 }

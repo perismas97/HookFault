@@ -7,14 +7,15 @@ events, invalid signatures, and temporary delivery failures.
 
 ## Status
 
-The current version provides the backend foundation, PostgreSQL connectivity,
-and a Docker Compose environment.
+The current version provides the backend foundation, a PostgreSQL schema
+managed by Flyway, and a Docker Compose environment.
 
 ## Stack
 
 - Kotlin targeting Java 21
 - Spring Boot 4.1.1 with Spring JDBC and Actuator
 - PostgreSQL 16
+- Flyway database migrations
 - Maven 3.9.16 via Maven Wrapper
 - Docker Compose
 
@@ -87,6 +88,25 @@ docker compose up -d postgres
 
 Do not run the containerized backend at the same time on port 8080.
 
+## Database Migrations
+
+Flyway applies versioned SQL migrations automatically when the backend starts
+and records their versions and checksums in `flyway_schema_history`.
+
+Migration files are in `backend/src/main/resources/db/migration/`.
+`V1__create_webhook_endpoints.sql` creates the `webhook_endpoints` table:
+
+| Column | Type | Constraints |
+| --- | --- | --- |
+| `id` | UUID | Primary key |
+| `name` | VARCHAR(100) | Required, non-blank |
+| `url` | VARCHAR(2048) | Required, non-blank |
+| `created_at` | TIMESTAMPTZ | Required, defaults to the database transaction timestamp |
+
+Already-applied migrations are not executed again on restart. Add a new
+versioned migration for subsequent schema changes rather than editing one
+that has already been applied.
+
 ## Tests
 
 With Docker Desktop running, execute from the repository root:
@@ -98,6 +118,9 @@ With Docker Desktop running, execute from the repository root:
 The startup integration tests launch the application on a random HTTP port and
 use a real PostgreSQL 16 database managed by Testcontainers. They verify the
 database connection and the HTTP health response, including database health.
+
+Migration integration tests also verify the schema, its constraints, Flyway
+validation, and preservation of existing data when migrations run again.
 
 Testcontainers starts an isolated database on an available port and cleans it
 up after the test run. No `docker compose up` is needed, and the tests do not
