@@ -1,5 +1,6 @@
 package com.hookfault.endpoints
 
+import com.hookfault.http.WebhookDestinationRejectedException
 import jakarta.validation.Valid
 import org.springframework.http.HttpStatus
 import org.springframework.http.MediaType
@@ -36,5 +37,10 @@ class WebhookEndpointController(private val service: WebhookEndpointService) {
             "Provide a non-blank name of up to $ENDPOINT_NAME_MAX_LENGTH characters and an absolute " +
                 "HTTP(S) URL of up to $ENDPOINT_URL_MAX_LENGTH characters, without credentials or a fragment.",
         ),
+    )
+
+    @ExceptionHandler(WebhookDestinationRejectedException::class)
+    fun rejectedDestination(): ResponseEntity<ProblemDetail> = ResponseEntity.badRequest().body(
+        ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, "Use a configured local webhook origin."),
     )
 }

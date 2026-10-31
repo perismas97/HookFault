@@ -9,6 +9,15 @@ spring:
     username: ${HOOKFAULT_DATABASE_USERNAME:hookfault}
     password: ${HOOKFAULT_DATABASE_PASSWORD:hookfault}
 
+hookfault:
+  webhooks:
+    allowed-origins:
+      - http://localhost:8090
+      - http://127.0.0.1:8090
+      - http://[::1]:8090
+      - http://demo-receiver:8090
+      - http://host.docker.internal:8090
+
 management:
   endpoints:
     web:

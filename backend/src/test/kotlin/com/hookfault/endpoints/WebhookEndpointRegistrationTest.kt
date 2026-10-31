@@ -4,6 +4,7 @@ import com.hookfault.PostgresTestConfiguration
 import com.sun.net.httpserver.HttpServer
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.AfterAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.junit.jupiter.params.ParameterizedTest
@@ -17,6 +18,8 @@ import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.boot.test.web.server.LocalServerPort
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.test.context.DynamicPropertyRegistry
+import org.springframework.test.context.DynamicPropertySource
 import tools.jackson.databind.ObjectMapper
 import java.net.InetSocketAddress
 import java.net.URI
@@ -41,6 +44,36 @@ class WebhookEndpointRegistrationTest @Autowired constructor(
     private val jdbcTemplate: JdbcTemplate,
     private val objectMapper: ObjectMapper,
 ) {
+    companion object {
+        private val receiverCalls = AtomicInteger()
+        private val receiver by lazy {
+            HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).apply {
+                createContext("/webhooks") { exchange ->
+                    receiverCalls.incrementAndGet()
+                    exchange.sendResponseHeaders(204, -1)
+                    exchange.close()
+                }
+                start()
+            }
+        }
+
+        @JvmStatic
+        @DynamicPropertySource
+        fun configureDestinations(registry: DynamicPropertyRegistry) {
+            registry.add("hookfault.webhooks.allowed-origins") {
+                "http://localhost:8090,http://127.0.0.1:8090,http://[::1]:8090," +
+                    "http://demo-receiver:8090,http://host.docker.internal:8090," +
+                    "http://127.0.0.1:${receiver.address.port}"
+            }
+        }
+
+        @JvmStatic
+        @AfterAll
+        fun stopReceiver() {
+            receiver.stop(0)
+        }
+    }
+
     @LocalServerPort
     private var port: Int = 0
 
@@ -77,7 +110,7 @@ class WebhookEndpointRegistrationTest @Autowired constructor(
     @Test
     fun acceptsValuesAtTheirLengthLimits() {
         val name = "n".repeat(100)
-        val prefix = "https://example.com/"
+        val prefix = "http://localhost:8090/"
         val url = prefix + "x".repeat(2048 - prefix.length)
 
         val response = post(requestBody(name, url))
@@ -114,22 +147,55 @@ class WebhookEndpointRegistrationTest @Autowired constructor(
 
     @Test
     fun doesNotContactReceiverDuringRegistration() {
-        val calls = AtomicInteger()
-        val receiver = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
-        receiver.createContext("/webhooks") { exchange ->
-            calls.incrementAndGet()
-            exchange.sendResponseHeaders(204, -1)
-            exchange.close()
-        }
-        receiver.start()
-        try {
-            val response = post(requestBody(url = "http://127.0.0.1:${receiver.address.port}/webhooks"))
+        val response = post(requestBody(url = "http://127.0.0.1:${receiver.address.port}/webhooks"))
+        assertThat(response.statusCode()).isEqualTo(201)
+        assertThat(receiverCalls.get()).isZero()
+    }
 
-            assertThat(response.statusCode()).isEqualTo(201)
-            assertThat(calls.get()).isZero()
-        } finally {
-            receiver.stop(0)
-        }
+    @ParameterizedTest
+    @ValueSource(strings = [
+        "https://example.com/webhooks", "http://192.168.1.2:8090/webhooks",
+        "http://169.254.169.254/latest/meta-data", "http://localhost:5432/",
+        "http://localhost:8080/actuator/health", "https://localhost:8090/webhooks",
+        "http://localhost.evil.test:8090/webhooks", "http://127.1:8090/webhooks",
+    ])
+    fun rejectsDisallowedDestinationsWithoutPersistence(url: String) {
+        assertRejected(requestBody(url = url))
+    }
+
+    @Test
+    @ExtendWith(OutputCaptureExtension::class)
+    fun doesNotEchoOrLogRejectedDestinationQueries(output: CapturedOutput) {
+        val response = assertRejected(requestBody(url = "http://example.com/webhooks?token=do-not-expose"))
+        assertThat(response.body()).doesNotContain("example.com", "do-not-expose")
+        assertThat(output.all).doesNotContain("do-not-expose")
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun rejectsOversizedRequestBodiesWithAndWithoutContentLength(chunked: Boolean) {
+        val before = endpointCount()
+        val response = post(requestBody() + " ".repeat(16 * 1024), chunked)
+        assertThat(response.statusCode()).isEqualTo(413)
+        assertThat(response.headers().firstValue("Content-Type").orElse("")).startsWith("application/problem+json")
+        assertThat(endpointCount()).isEqualTo(before)
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun acceptsExactRequestBodyByteLimitWithAndWithoutContentLength(chunked: Boolean) {
+        val body = requestBody()
+        val padded = body + " ".repeat(16 * 1024 - body.toByteArray(Charsets.UTF_8).size)
+        assertThat(post(padded, chunked).statusCode()).isEqualTo(201)
+    }
+
+    @Test
+    fun rejectsMultibyteBodiesBasedOnBytesRatherThanCharacterCount() {
+        val before = endpointCount()
+        val body = requestBody() + "\u03b1".repeat(8200)
+        assertThat(body.length).isLessThan(16 * 1024)
+        assertThat(post(body).statusCode()).isEqualTo(413)
+        assertThat(endpointCount()).isEqualTo(before)
     }
 
     @ParameterizedTest
@@ -221,13 +287,15 @@ class WebhookEndpointRegistrationTest @Autowired constructor(
         return response
     }
 
-    private fun post(body: String): HttpResponse<String> {
+    private fun post(body: String, chunked: Boolean = false): HttpResponse<String> {
+        val publisher = if (chunked) HttpRequest.BodyPublishers.ofInputStream { body.byteInputStream(Charsets.UTF_8) }
+            else HttpRequest.BodyPublishers.ofString(body)
         val request = HttpRequest.newBuilder()
             .uri(URI.create("http://127.0.0.1:$port/api/v1/webhook-endpoints"))
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .timeout(Duration.ofSeconds(10))
-            .POST(HttpRequest.BodyPublishers.ofString(body))
+            .POST(publisher)
             .build()
         val response = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(5))

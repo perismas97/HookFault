@@ -1,5 +1,7 @@
 package com.hookfault.endpoints
 
+import com.hookfault.http.ApiRequestBodyLimitFilter
+import com.hookfault.http.WebhookDestinationRejectedException
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Test
@@ -13,6 +15,7 @@ import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import org.springframework.test.web.servlet.setup.MockMvcBuilders
+import org.springframework.test.web.servlet.setup.StandaloneMockMvcBuilder
 import org.springframework.validation.beanvalidation.LocalValidatorFactoryBean
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
@@ -26,6 +29,7 @@ class WebhookEndpointControllerTest {
     private val mvc = MockMvcBuilders.standaloneSetup(WebhookEndpointController(service))
         .setValidator(validator)
         .setMessageConverters(JacksonJsonHttpMessageConverter(mapper))
+        .addFilters<StandaloneMockMvcBuilder>(ApiRequestBodyLimitFilter())
         .build()
 
     @AfterEach
@@ -57,6 +61,28 @@ class WebhookEndpointControllerTest {
         assertThat(body.path("url").asString()).isEqualTo(endpoint.url)
         assertThat(body.path("createdAt").asString()).isEqualTo(endpoint.createdAt.toString())
         Mockito.verify(service).register(endpoint.name, endpoint.url)
+    }
+
+    @Test
+    fun reportsRejectedDestinationsWithoutEchoingTheUrl() {
+        val url = "http://example.com/webhooks?token=do-not-expose"
+        Mockito.`when`(service.register("Demo receiver", url)).thenThrow(WebhookDestinationRejectedException())
+        val result = mvc.perform(
+            post("/api/v1/webhook-endpoints").contentType("application/json")
+                .content(mapper.writeValueAsString(RegisterWebhookEndpointRequest("Demo receiver", url))),
+        ).andExpect(status().isBadRequest).andReturn()
+        assertThat(result.response.contentAsString).contains("configured local webhook origin")
+            .doesNotContain("example.com", "do-not-expose")
+    }
+
+    @Test
+    fun rejectsOversizedBodiesBeforeCallingTheService() {
+        val result = mvc.perform(
+            post("/api/v1/webhook-endpoints").contentType("application/json")
+                .content(" ".repeat(16 * 1024 + 1)),
+        ).andExpect(status().`is`(413)).andReturn()
+        assertThat(result.response.contentAsString).contains("16384")
+        Mockito.verifyNoInteractions(service)
     }
 
     @ParameterizedTest

@@ -7,8 +7,9 @@ events, invalid signatures, and temporary delivery failures.
 
 ## Status
 
-The current version supports webhook endpoint registration with validation,
-a PostgreSQL schema managed by Flyway, and a Docker Compose environment.
+The current version supports webhook endpoint registration with validation and
+an explicit local destination allowlist, bounded HTTP request bodies, a
+PostgreSQL schema managed by Flyway, and a Docker Compose environment.
 
 ## Stack
 
@@ -108,10 +109,56 @@ creation timestamp. Both values are returned from the stored record.
 `name` is required, non-blank, and limited to 100 characters. `url` is required,
 limited to 2048 characters, and must be an absolute HTTP or HTTPS URL with a
 host and a valid port if specified. URLs with credentials or fragments are
-rejected. Invalid requests return HTTP `400 Bad Request`.
+rejected. The URL's origin must also be explicitly allowed below. Invalid or
+disallowed destinations return HTTP `400 Bad Request`.
 
 Registration only stores the endpoint. It does not resolve the hostname,
 contact the receiver, or send a webhook; the receiver need not be running.
+
+## Destination And Request Policy
+
+The default allowlist contains these exact origins:
+
+| Origin | Intended receiver location |
+| --- | --- |
+| `http://localhost:8090` | Same host or container as the backend |
+| `http://127.0.0.1:8090` | Same host or container, IPv4 loopback |
+| `http://[::1]:8090` | Same host or container, IPv6 loopback |
+| `http://demo-receiver:8090` | Docker service named `demo-receiver` |
+| `http://host.docker.internal:8090` | Host machine from Docker Desktop |
+
+Inside a container, `localhost` refers to that container, not to Windows. For a
+receiver running on Windows while the backend runs in Docker Desktop, register
+`http://host.docker.internal:8090/webhooks` instead of `localhost`.
+
+Matching uses the parsed scheme, hostname, and effective port. Paths and query
+strings do not grant access to a different origin. Other ports, private-network
+addresses, public hosts, wildcard hosts, credentials, and fragments are not
+accepted by default. Hostnames are case-insensitive; alternate numeric IP forms,
+trailing-dot hostnames, and encoded hostnames are not aliases in the allowlist.
+
+To use a different demo port, replace `hookfault.webhooks.allowed-origins` in
+`backend/src/main/resources/application.yml` with explicit origins. Configuration
+is restricted to the five supported hostnames above; an empty list or an origin
+with a path, query, credentials, or fragment prevents application startup. There
+is no API for changing this policy. Restrict the list to the receivers you use.
+
+Incoming HTTP request bodies and prepared outbound JSON payloads are limited
+to **16 KiB (16,384 bytes)**, independently of the field character limits. An
+oversized incoming body returns HTTP `413 Content Too Large` before JSON
+deserialization or database writes. The limit also applies when a request has
+no `Content-Length`, including chunked requests.
+
+The outbound request factory rechecks the destination, including URLs loaded
+from existing database records. The HTTP client never follows redirects, even
+to another allowed origin, and does not use system proxies. Its connection
+timeout is 2 seconds; prepared requests have a 5-second HTTP request timeout.
+These settings do not make the request timeout a deadline for consuming an
+arbitrary streamed response body.
+
+This is a local-demo policy, not a production SSRF sandbox. It trusts the
+machine's loopback configuration and Docker's hostname resolution. Only run
+receivers you control, and do not expose the backend to untrusted callers.
 
 ## Database Migrations
 
@@ -147,10 +194,11 @@ database connection and the HTTP health response, including database health.
 Migration integration tests also verify the schema, its constraints, Flyway
 validation, and preservation of existing data when migrations run again.
 
-Request validation and isolated controller tests run without Docker:
+Request validation, controller, destination policy, request-size, and HTTP
+client tests run without Docker:
 
 ```powershell
-.\backend\mvnw.cmd -f backend/pom.xml "-Dtest=RegisterWebhookEndpointRequestValidationTest,WebhookEndpointControllerTest" test
+.\backend\mvnw.cmd -f backend/pom.xml "-Dtest=RegisterWebhookEndpointRequestValidationTest,WebhookEndpointControllerTest,WebhookEndpointServiceTest,WebhookDestinationPolicyTest,ApiRequestBodyLimitFilterTest,WebhookHttpPolicyTest,RequestLimitsHttpTest" test
 ```
 
 Controller tests use Mockito's subclass mock maker with reflection-based member
@@ -159,6 +207,11 @@ access for Spring service mocks, without dynamically attaching a Java agent.
 Registration integration tests use real HTTP requests and PostgreSQL to verify
 persisted responses, rejection of invalid input without database writes, and
 absence of outgoing webhooks during registration.
+
+Local HTTP stubs verify that 301, 302, 303, 307, and 308 responses never trigger
+a second request, including relative redirects and redirects to allowed origins.
+The tests also cover request timeouts, destination parser bypass attempts,
+exact-size bodies, multibyte input, and bodies sent without `Content-Length`.
 
 Testcontainers starts an isolated database on an available port and cleans it
 up after the test run. No `docker compose up` is needed, and the tests do not

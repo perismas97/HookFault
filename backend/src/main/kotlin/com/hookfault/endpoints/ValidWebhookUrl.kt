@@ -20,19 +20,24 @@ annotation class ValidWebhookUrl(
 class WebhookUrlValidator : ConstraintValidator<ValidWebhookUrl, String> {
     override fun isValid(value: String?, context: ConstraintValidatorContext): Boolean {
         if (value == null) return true
-        if (value.length > ENDPOINT_URL_MAX_LENGTH) return false
+        return parseWebhookUrl(value) != null
+    }
+}
 
-        val uri = try {
-            URI(value)
-        } catch (_: URISyntaxException) {
-            return false
-        }
+internal fun parseWebhookUrl(value: String): URI? {
+    if (value.length > ENDPOINT_URL_MAX_LENGTH) return null
+    val uri = try {
+        URI(value)
+    } catch (_: URISyntaxException) {
+        return null
+    }
 
-        return (uri.scheme.equals("http", ignoreCase = true) || uri.scheme.equals("https", ignoreCase = true)) &&
-            !uri.isOpaque &&
-            !uri.host.isNullOrBlank() &&
-            uri.rawUserInfo == null &&
-            uri.rawFragment == null &&
-            (uri.port == -1 || uri.port in 1..65535)
+    return uri.takeIf {
+        (it.scheme.equals("http", ignoreCase = true) || it.scheme.equals("https", ignoreCase = true)) &&
+            !it.isOpaque &&
+            !it.host.isNullOrBlank() &&
+            it.rawUserInfo == null &&
+            it.rawFragment == null &&
+            (it.port == -1 || it.port in 1..65535)
     }
 }
