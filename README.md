@@ -7,8 +7,8 @@ events, invalid signatures, and temporary delivery failures.
 
 ## Status
 
-The current version provides the backend foundation, a PostgreSQL schema
-managed by Flyway, and a Docker Compose environment.
+The current version supports webhook endpoint registration with validation,
+a PostgreSQL schema managed by Flyway, and a Docker Compose environment.
 
 ## Stack
 
@@ -88,6 +88,31 @@ docker compose up -d postgres
 
 Do not run the containerized backend at the same time on port 8080.
 
+## Register A Webhook Endpoint
+
+With the backend running, send a JSON request from PowerShell:
+
+```powershell
+$body = @{
+    name = "Demo receiver"
+    url = "http://localhost:8090/webhooks"
+} | ConvertTo-Json
+
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/v1/webhook-endpoints -ContentType "application/json" -Body $body
+```
+
+A successful request returns HTTP `201 Created` with `id`, `name`, `url`, and
+`createdAt`. The server generates the UUID, and the database provides the
+creation timestamp. Both values are returned from the stored record.
+
+`name` is required, non-blank, and limited to 100 characters. `url` is required,
+limited to 2048 characters, and must be an absolute HTTP or HTTPS URL with a
+host and a valid port if specified. URLs with credentials or fragments are
+rejected. Invalid requests return HTTP `400 Bad Request`.
+
+Registration only stores the endpoint. It does not resolve the hostname,
+contact the receiver, or send a webhook; the receiver need not be running.
+
 ## Database Migrations
 
 Flyway applies versioned SQL migrations automatically when the backend starts
@@ -121,6 +146,19 @@ database connection and the HTTP health response, including database health.
 
 Migration integration tests also verify the schema, its constraints, Flyway
 validation, and preservation of existing data when migrations run again.
+
+Request validation and isolated controller tests run without Docker:
+
+```powershell
+.\backend\mvnw.cmd -f backend/pom.xml "-Dtest=RegisterWebhookEndpointRequestValidationTest,WebhookEndpointControllerTest" test
+```
+
+Controller tests use Mockito's subclass mock maker with reflection-based member
+access for Spring service mocks, without dynamically attaching a Java agent.
+
+Registration integration tests use real HTTP requests and PostgreSQL to verify
+persisted responses, rejection of invalid input without database writes, and
+absence of outgoing webhooks during registration.
 
 Testcontainers starts an isolated database on an available port and cleans it
 up after the test run. No `docker compose up` is needed, and the tests do not
