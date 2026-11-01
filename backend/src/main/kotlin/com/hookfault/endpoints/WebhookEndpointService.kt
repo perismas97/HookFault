@@ -15,4 +15,14 @@ class WebhookEndpointService(
         destinations.requireAllowed(url)
         return repository.create(UUID.randomUUID(), name, url)
     }
+
+    @Transactional(readOnly = true)
+    fun get(id: UUID): WebhookEndpoint = repository.findById(id) ?: throw WebhookEndpointNotFoundException()
+
+    @Transactional(readOnly = true)
+    fun list(limit: Int, offset: Int): WebhookEndpointListResponse {
+        if (limit !in 1..MAX_ENDPOINT_LIMIT || offset < 0) throw InvalidEndpointPaginationException()
+        val rows = repository.findPage(limit + 1, offset)
+        return WebhookEndpointListResponse(rows.take(limit).map { it.toResponse() }, limit, offset, rows.size > limit)
+    }
 }

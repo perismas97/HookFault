@@ -7,9 +7,9 @@ events, invalid signatures, and temporary delivery failures.
 
 ## Status
 
-The current version supports webhook endpoint registration with validation and
-an explicit local destination allowlist, bounded HTTP request bodies, a
-PostgreSQL schema managed by Flyway, and a Docker Compose environment.
+The current version supports webhook endpoint registration and paginated
+inspection, a local destination allowlist, consistent API errors, Swagger UI,
+bounded HTTP request bodies, and a PostgreSQL schema managed by Flyway.
 
 ## Stack
 
@@ -17,6 +17,7 @@ PostgreSQL schema managed by Flyway, and a Docker Compose environment.
 - Spring Boot 4.1.1 with Spring JDBC and Actuator
 - PostgreSQL 16
 - Flyway database migrations
+- Springdoc OpenAPI 3.2.0 with Swagger UI
 - Maven 3.9.16 via Maven Wrapper
 - Docker Compose
 
@@ -99,12 +100,14 @@ $body = @{
     url = "http://localhost:8090/webhooks"
 } | ConvertTo-Json
 
-Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/v1/webhook-endpoints -ContentType "application/json" -Body $body
+$endpoint = Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/v1/webhook-endpoints -ContentType "application/json" -Body $body
+$endpoint
 ```
 
 A successful request returns HTTP `201 Created` with `id`, `name`, `url`, and
 `createdAt`. The server generates the UUID, and the database provides the
 creation timestamp. Both values are returned from the stored record.
+The `Location` response header contains the relative URL for retrieving it.
 
 `name` is required, non-blank, and limited to 100 characters. `url` is required,
 limited to 2048 characters, and must be an absolute HTTP or HTTPS URL with a
@@ -114,6 +117,80 @@ disallowed destinations return HTTP `400 Bad Request`.
 
 Registration only stores the endpoint. It does not resolve the hostname,
 contact the receiver, or send a webhook; the receiver need not be running.
+
+## Inspect Webhook Endpoints
+
+| Method | Path | Result |
+| --- | --- | --- |
+| `POST` | `/api/v1/webhook-endpoints` | Register an endpoint; `201 Created` |
+| `GET` | `/api/v1/webhook-endpoints` | List a bounded page; `200 OK` |
+| `GET` | `/api/v1/webhook-endpoints/{id}` | Retrieve a stored endpoint; `200 OK` |
+
+List endpoints and retrieve the endpoint registered above:
+
+```powershell
+Invoke-RestMethod "http://localhost:8080/api/v1/webhook-endpoints?limit=20&offset=0"
+Invoke-RestMethod "http://localhost:8080/api/v1/webhook-endpoints/$($endpoint.id)"
+```
+
+The list response has `items`, `limit`, `offset`, and `hasMore`. Each item has
+only `id`, `name`, `url`, and `createdAt`. `limit` defaults to 20 and accepts
+1 through 100; `offset` defaults to 0 and accepts non-negative 32-bit integers.
+Use `offset + limit` to request the next page when `hasMore` is true. An empty
+result returns an empty `items` array, not a `404`.
+
+Endpoints are ordered by `createdAt` descending, then UUID descending to break
+ties. Offset pagination is not a snapshot: concurrent registrations can move
+items between pages. Lookup IDs must use canonical UUID format; uppercase hex
+digits are accepted. A valid but unknown UUID returns `404`.
+
+Inspection returns stored records even if a URL is no longer allowed by the
+current destination policy. Reading a record does not contact its receiver or
+authorize delivery to it.
+
+## API Errors
+
+Application API errors use `application/problem+json` with a stable `code`:
+
+```json
+{
+  "type": "about:blank",
+  "title": "Not Found",
+  "status": 404,
+  "detail": "No webhook endpoint exists with this ID.",
+  "instance": "/api/v1/webhook-endpoints/00000000-0000-4000-8000-000000000001",
+  "code": "ENDPOINT_NOT_FOUND",
+  "errors": []
+}
+```
+
+| HTTP status | Codes |
+| --- | --- |
+| `400` | `VALIDATION_FAILED`, `INVALID_JSON`, `DESTINATION_NOT_ALLOWED`, `INVALID_ENDPOINT_ID`, `INVALID_PAGINATION`, `INVALID_PARAMETER`, `INVALID_REQUEST` |
+| `404` | `ENDPOINT_NOT_FOUND`, `ROUTE_NOT_FOUND` |
+| `405` | `METHOD_NOT_ALLOWED` (includes the `Allow` header) |
+| `406` | `NOT_ACCEPTABLE` |
+| `413` | `REQUEST_TOO_LARGE` |
+| `415` | `UNSUPPORTED_MEDIA_TYPE` |
+| `500` | `INTERNAL_ERROR` |
+
+Validation errors include an `errors` array of `{ "field": "name", "message":
+"must not be blank" }` entries. Other errors return an empty array. Responses
+omit rejected body/query values, exception messages, SQL, and stack traces.
+`instance` is the request path without its query string. Use `code` for client
+logic rather than parsing the explanatory English text.
+
+## Swagger And OpenAPI
+
+With the backend running, open [Swagger UI](http://localhost:8080/swagger-ui.html).
+The [OpenAPI JSON](http://localhost:8080/v3/api-docs) describes the endpoint APIs,
+request limits, pagination, public response fields, and error schemas. Actuator
+endpoints are excluded from this specification.
+
+Swagger UI loads its assets locally and uses the local API definition, without
+the sample Petstore definition or remote schema validation. Its API calls use
+the same destination policy and validation as any other client. A POST from
+Swagger UI creates a real record in the local database.
 
 ## Destination And Request Policy
 
@@ -198,7 +275,7 @@ Request validation, controller, destination policy, request-size, and HTTP
 client tests run without Docker:
 
 ```powershell
-.\backend\mvnw.cmd -f backend/pom.xml "-Dtest=RegisterWebhookEndpointRequestValidationTest,WebhookEndpointControllerTest,WebhookEndpointServiceTest,WebhookDestinationPolicyTest,ApiRequestBodyLimitFilterTest,WebhookHttpPolicyTest,RequestLimitsHttpTest" test
+.\backend\mvnw.cmd -f backend/pom.xml "-Dtest=ApiErrorContractTest,RegisterWebhookEndpointRequestValidationTest,WebhookEndpointControllerTest,WebhookEndpointServiceTest,WebhookDestinationPolicyTest,ApiRequestBodyLimitFilterTest,WebhookHttpPolicyTest,RequestLimitsHttpTest" test
 ```
 
 Controller tests use Mockito's subclass mock maker with reflection-based member
@@ -212,6 +289,12 @@ Local HTTP stubs verify that 301, 302, 303, 307, and 308 responses never trigger
 a second request, including relative redirects and redirects to allowed origins.
 The tests also cover request timeouts, destination parser bypass attempts,
 exact-size bodies, multibyte input, and bodies sent without `Content-Length`.
+
+Query integration tests verify stored-record lookup, the registration `Location`
+header, stable ordering, pagination boundaries, empty results, and invalid IDs.
+Error contract tests verify the shared response shape and that sensitive input
+is not echoed. Real HTTP tests also check the generated OpenAPI schemas and
+that Swagger UI and its assets are served successfully.
 
 Testcontainers starts an isolated database on an available port and cleans it
 up after the test run. No `docker compose up` is needed, and the tests do not

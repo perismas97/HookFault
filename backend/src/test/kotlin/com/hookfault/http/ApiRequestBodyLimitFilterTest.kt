@@ -10,10 +10,11 @@ import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
 import org.springframework.mock.web.MockHttpServletRequest
 import org.springframework.mock.web.MockHttpServletResponse
+import tools.jackson.databind.json.JsonMapper
 import java.nio.charset.StandardCharsets.UTF_8
 
 class ApiRequestBodyLimitFilterTest {
-    private val filter = ApiRequestBodyLimitFilter()
+    private val filter = ApiRequestBodyLimitFilter(JsonMapper.builder().build())
 
     @Test
     fun preservesAnExactLimitBodyForTheController() {

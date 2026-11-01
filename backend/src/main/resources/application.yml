@@ -9,6 +9,13 @@ spring:
     username: ${HOOKFAULT_DATABASE_USERNAME:hookfault}
     password: ${HOOKFAULT_DATABASE_PASSWORD:hookfault}
 
+springdoc:
+  paths-to-match: /api/v1/**
+  override-with-generic-response: false
+  swagger-ui:
+    disable-swagger-default-url: true
+    validator-url: ""
+
 hookfault:
   webhooks:
     allowed-origins:

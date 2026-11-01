@@ -1,5 +1,6 @@
 package com.hookfault.endpoints
 
+import com.hookfault.api.ApiExceptionHandler
 import com.hookfault.http.ApiRequestBodyLimitFilter
 import com.hookfault.http.WebhookDestinationRejectedException
 import org.assertj.core.api.Assertions.assertThat
@@ -13,6 +14,7 @@ import org.springframework.boot.test.system.CapturedOutput
 import org.springframework.boot.test.system.OutputCaptureExtension
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post
+import org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get
 import org.springframework.test.web.servlet.result.MockMvcResultMatchers.status
 import org.springframework.test.web.servlet.setup.MockMvcBuilders
 import org.springframework.test.web.servlet.setup.StandaloneMockMvcBuilder
@@ -29,7 +31,8 @@ class WebhookEndpointControllerTest {
     private val mvc = MockMvcBuilders.standaloneSetup(WebhookEndpointController(service))
         .setValidator(validator)
         .setMessageConverters(JacksonJsonHttpMessageConverter(mapper))
-        .addFilters<StandaloneMockMvcBuilder>(ApiRequestBodyLimitFilter())
+        .setControllerAdvice(ApiExceptionHandler())
+        .addFilters<StandaloneMockMvcBuilder>(ApiRequestBodyLimitFilter(mapper))
         .build()
 
     @AfterEach
@@ -55,12 +58,47 @@ class WebhookEndpointControllerTest {
         ).andExpect(status().isCreated).andReturn()
 
         val body = mapper.readTree(result.response.contentAsString)
+        assertThat(result.response.getHeader("Location")).isEqualTo("/api/v1/webhook-endpoints/${endpoint.id}")
         assertThat(body.size()).isEqualTo(4)
         assertThat(body.path("id").asString()).isEqualTo(endpoint.id.toString())
         assertThat(body.path("name").asString()).isEqualTo(endpoint.name)
         assertThat(body.path("url").asString()).isEqualTo(endpoint.url)
         assertThat(body.path("createdAt").asString()).isEqualTo(endpoint.createdAt.toString())
         Mockito.verify(service).register(endpoint.name, endpoint.url)
+    }
+
+    @Test
+    fun returnsTheStoredEndpointForACanonicalId() {
+        val endpoint = WebhookEndpoint(UUID.randomUUID(), "Receiver", "http://localhost:8090/webhooks", Instant.now())
+        Mockito.`when`(service.get(endpoint.id)).thenReturn(endpoint)
+        val result = mvc.perform(get("/api/v1/webhook-endpoints/${endpoint.id.toString().uppercase()}"))
+            .andExpect(status().isOk).andReturn()
+        val json = mapper.readTree(result.response.contentAsString)
+        assertThat(json.size()).isEqualTo(4)
+        assertThat(json.path("id").asString()).isEqualTo(endpoint.id.toString())
+        assertThat(json.path("createdAt").asString()).isEqualTo(endpoint.createdAt.toString())
+        Mockito.verify(service).get(endpoint.id)
+    }
+
+    @Test
+    fun returnsTheDefaultListPageWithOnlyExplicitPublicFields() {
+        val endpoint = WebhookEndpoint(UUID.randomUUID(), "Receiver", "http://localhost:8090/webhooks", Instant.now())
+        Mockito.`when`(service.list(20, 0)).thenReturn(WebhookEndpointListResponse(listOf(endpoint.toResponse()), 20, 0, false))
+        val result = mvc.perform(get("/api/v1/webhook-endpoints")).andExpect(status().isOk).andReturn()
+        val json = mapper.readTree(result.response.contentAsString)
+        assertThat(json.size()).isEqualTo(4)
+        assertThat(json.path("items").first().size()).isEqualTo(4)
+        assertThat(json.path("items").first().path("id").asString()).isEqualTo(endpoint.id.toString())
+        assertThat(json.path("limit").asInt()).isEqualTo(20)
+        assertThat(json.path("hasMore").asBoolean()).isFalse()
+        Mockito.verify(service).list(20, 0)
+    }
+
+    @Test
+    fun forwardsExplicitPaginationParameters() {
+        Mockito.`when`(service.list(100, 5)).thenReturn(WebhookEndpointListResponse(emptyList(), 100, 5, false))
+        mvc.perform(get("/api/v1/webhook-endpoints?limit=100&offset=5")).andExpect(status().isOk)
+        Mockito.verify(service).list(100, 5)
     }
 
     @Test

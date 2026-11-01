@@ -1,5 +1,6 @@
 package com.hookfault.http
 
+import com.hookfault.api.ApiProblems
 import jakarta.servlet.FilterChain
 import jakarta.servlet.ReadListener
 import jakarta.servlet.ServletInputStream
@@ -9,7 +10,9 @@ import jakarta.servlet.http.HttpServletResponse
 import org.springframework.core.Ordered
 import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Component
+import org.springframework.http.HttpStatus
 import org.springframework.web.filter.OncePerRequestFilter
+import tools.jackson.databind.ObjectMapper
 import java.io.BufferedReader
 import java.io.ByteArrayInputStream
 import java.io.InputStreamReader
@@ -17,28 +20,29 @@ import java.nio.charset.StandardCharsets
 
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
-class ApiRequestBodyLimitFilter : OncePerRequestFilter() {
+class ApiRequestBodyLimitFilter(private val objectMapper: ObjectMapper) : OncePerRequestFilter() {
     override fun doFilterInternal(request: HttpServletRequest, response: HttpServletResponse, chain: FilterChain) {
         if (request.contentLengthLong > MAX_JSON_REQUEST_BYTES) {
-            reject(response)
+            reject(request, response)
             return
         }
 
         // Read at most one byte beyond the limit, including chunked requests without Content-Length.
         val body = request.inputStream.readNBytes(MAX_JSON_REQUEST_BYTES + 1)
         if (body.size > MAX_JSON_REQUEST_BYTES) {
-            reject(response)
+            reject(request, response)
             return
         }
         chain.doFilter(BufferedRequest(request, body), response)
     }
 
-    private fun reject(response: HttpServletResponse) {
+    private fun reject(request: HttpServletRequest, response: HttpServletResponse) {
         response.status = 413
         response.contentType = "application/problem+json"
         response.characterEncoding = StandardCharsets.UTF_8.name()
-        response.writer.write(
-            """{"type":"about:blank","title":"Content Too Large","status":413,"detail":"Request body must not exceed $MAX_JSON_REQUEST_BYTES bytes."}""",
+        objectMapper.writeValue(
+            response.outputStream,
+            ApiProblems.create(HttpStatus.valueOf(413), "REQUEST_TOO_LARGE", "Request body must not exceed $MAX_JSON_REQUEST_BYTES bytes.", request.requestURI),
         )
     }
 
