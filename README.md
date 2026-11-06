@@ -9,7 +9,8 @@ events, invalid signatures, and temporary delivery failures.
 
 The current version supports webhook endpoint registration and paginated
 inspection, a local destination allowlist, consistent API errors, Swagger UI,
-bounded HTTP request bodies, and a PostgreSQL schema managed by Flyway.
+bounded HTTP request bodies, a versioned event model, and a PostgreSQL schema
+managed by Flyway.
 
 ## Stack
 
@@ -192,6 +193,57 @@ the sample Petstore definition or remote schema validation. Its API calls use
 the same destination policy and validation as any other client. A POST from
 Swagger UI creates a real record in the local database.
 
+## Webhook Event Envelope
+
+The `com.hookfault.events` package provides versioned events for in-process
+creation. A `demo.user.created` event has this structure (formatted here for
+readability):
+
+```json
+{
+  "schemaVersion": 1,
+  "id": "00000000-0000-4000-8000-000000000001",
+  "type": "demo.user.created",
+  "occurredAt": "2026-11-06T10:00:00.123456789Z",
+  "runId": "00000000-0000-4000-8000-000000000002",
+  "payload": {
+    "userId": "00000000-0000-4000-8000-000000000003",
+    "displayName": "Demo user"
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `schemaVersion` | Envelope format version; currently `1` |
+| `id` | Logical event UUID, retained when the same event is sent again |
+| `type` | Event kind; currently `demo.user.created` |
+| `occurredAt` | Original event time as a UTC ISO-8601 instant |
+| `runId` | Scenario-run UUID supplied by the caller |
+| `payload` | Typed fictional user data: UUID `userId` and `displayName` |
+
+All six envelope fields and both payload fields are required. Unsupported
+versions and event types are rejected when reading the model. `displayName`
+must be non-blank and at most 100 characters. Use fictional data only; the
+built-in factory uses the label `Demo user`.
+
+`WebhookEventFactory.userCreated(runId, userId)` generates a new event UUID and
+uses a UTC clock for its timestamp. `WebhookEventSerializer.serialize(event)`
+produces compact UTF-8 JSON with a fixed field order, UTC textual timestamps,
+and the existing 16 KiB payload limit. These writer settings do not change the
+application's REST JSON settings.
+
+The returned `SerializedWebhookEvent` retains the envelope and its original
+bytes. `bodyBytes()` returns defensive copies of those bytes, and `size` is
+their byte length. Reuse this serialized result for retries or deliberate
+duplicates. Calling the factory again creates a different logical event,
+even if its user and run IDs are unchanged.
+
+This is HookFault's wire format, not a general JSON canonicalization algorithm.
+Equivalent JSON can have different bytes after changes to whitespace, escaping,
+or property order; retain the original bytes rather than parse and reserialize
+them for signature verification.
+
 ## Destination And Request Policy
 
 The default allowlist contains these exact origins:
@@ -295,6 +347,17 @@ header, stable ordering, pagination boundaries, empty results, and invalid IDs.
 Error contract tests verify the shared response shape and that sensitive input
 is not echoed. Real HTTP tests also check the generated OpenAPI schemas and
 that Swagger UI and its assets are served successfully.
+
+Event tests run independently without Docker:
+
+```powershell
+.\backend\mvnw.cmd -f backend/pom.xml "-Dtest=WebhookEventEnvelopeTest,WebhookEventFactoryTest,WebhookEventSerializerTest" test
+```
+
+They verify required metadata, schema versions, fictional payload constraints,
+the exact version-one JSON bytes, Unicode/escaping, round trips, and defensive
+byte copies. A fixed test clock separates new-event identity from repeated
+reads of the same serialized event.
 
 Testcontainers starts an isolated database on an available port and cleans it
 up after the test run. No `docker compose up` is needed, and the tests do not
