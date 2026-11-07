@@ -244,6 +244,31 @@ Equivalent JSON can have different bytes after changes to whitespace, escaping,
 or property order; retain the original bytes rather than parse and reserialize
 them for signature verification.
 
+## Webhook Signing
+
+`WebhookEventSigner.sign(event, secret, sentAt)` signs a serialized event using
+HMAC-SHA256. The caller supplies raw secret bytes (at least 32 bytes) and a send
+time. Use a randomly generated shared secret; never commit it or include it
+in an HTTP header. The signer has no default key.
+
+| Header | Value |
+| --- | --- |
+| `X-HookFault-Timestamp` | Send time in decimal Unix seconds, without fractional digits |
+| `X-HookFault-Signature` | `v1=` followed by 64 lowercase hexadecimal digits |
+
+The signed input is the ASCII timestamp, one literal period, then the exact
+JSON body bytes, with no extra separator or trailing newline:
+
+```text
+HMAC-SHA256(secret, ASCII(timestamp + ".") || rawBody)
+```
+
+`||` means byte concatenation. The `v1=` prefix identifies the signing format,
+independently of the event's `schemaVersion`. The returned `SignedWebhookEvent`
+holds both the headers and the serialized event so the same body can be used
+without re-encoding it. A retry can sign the original body with a new send
+timestamp; it retains the original event ID and `occurredAt`.
+
 ## Destination And Request Policy
 
 The default allowlist contains these exact origins:
@@ -358,6 +383,15 @@ They verify required metadata, schema versions, fictional payload constraints,
 the exact version-one JSON bytes, Unicode/escaping, round trips, and defensive
 byte copies. A fixed test clock separates new-event identity from repeated
 reads of the same serialized event.
+
+Signing tests also run without Docker:
+
+```powershell
+.\backend\mvnw.cmd -f backend/pom.xml "-Dtest=WebhookEventSignerTest" test
+```
+
+They cover a known [RFC 4231 vector](https://www.rfc-editor.org/rfc/rfc4231#section-4.2),
+an independent UTF-8 webhook vector, and changes to the body, timestamp, and key.
 
 Testcontainers starts an isolated database on an available port and cleans it
 up after the test run. No `docker compose up` is needed, and the tests do not
