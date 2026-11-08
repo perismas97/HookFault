@@ -1,0 +1,22 @@
+server:
+  address: 127.0.0.1
+  port: 8090
+  error:
+    include-message: never
+    include-stacktrace: never
+
+spring:
+  application:
+    name: hookfault-demo-receiver
+  servlet:
+    multipart:
+      enabled: false
+  mvc:
+    problemdetails:
+      enabled: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health

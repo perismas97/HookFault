@@ -30,6 +30,15 @@ services:
       postgres:
         condition: service_healthy
 
+  demo-receiver:
+    build:
+      context: .
+      dockerfile: demo-receiver/Dockerfile
+    environment:
+      SERVER_ADDRESS: 0.0.0.0
+    ports:
+      - "127.0.0.1:8090:8090"
+
 volumes:
   hookfault-postgres:
     name: hookfault-postgres

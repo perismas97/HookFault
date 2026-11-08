@@ -1,0 +1,7 @@
+**
+!backend/mvnw
+!backend/.mvn/jvm.config
+!backend/.mvn/wrapper/maven-wrapper.properties
+!demo-receiver/pom.xml
+!demo-receiver/src/
+**/.env*

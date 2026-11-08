@@ -10,7 +10,7 @@ events, invalid signatures, and temporary delivery failures.
 The current version supports webhook endpoint registration and paginated
 inspection, a local destination allowlist, consistent API errors, Swagger UI,
 bounded HTTP request bodies, a versioned event model, and a PostgreSQL schema
-managed by Flyway.
+managed by Flyway. A standalone demo receiver exposes a local webhook route.
 
 ## Stack
 
@@ -37,6 +37,7 @@ Check application health from another PowerShell terminal:
 
 ```powershell
 Invoke-RestMethod http://localhost:8080/actuator/health
+Invoke-RestMethod http://localhost:8090/actuator/health
 ```
 
 The [health endpoint](http://localhost:8080/actuator/health) returns
@@ -73,7 +74,8 @@ From the repository root, on Windows PowerShell:
 .\backend\mvnw.cmd -f backend/pom.xml clean verify
 ```
 
-On Linux or macOS:
+On Linux or macOS, ensure `unzip` is available so the wrapper uses the
+ZIP distribution that matches the pinned checksum:
 
 ```sh
 ./backend/mvnw -f backend/pom.xml clean verify
@@ -91,14 +93,43 @@ docker compose up -d postgres
 
 Do not run the containerized backend at the same time on port 8080.
 
+## Demo Webhook Receiver
+
+The receiver is a separate Kotlin/Spring Boot application in `demo-receiver/`,
+with its own executable JAR and no database dependency. To start only the
+receiver, without starting the backend or PostgreSQL:
+
+```powershell
+docker compose up --build -d demo-receiver
+Invoke-RestMethod http://127.0.0.1:8090/actuator/health
+curl.exe -i -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8090/webhooks
+```
+
+The health endpoint reports `UP`. The POST intentionally returns
+`503 Service Unavailable`: unverified events are not processed, even when
+signature headers are present. The receiver reads raw bytes without parsing
+the JSON and returns `413` for bodies larger than 16 KiB, including chunked
+bodies. It does not log, echo, or persist the body or signing headers.
+
+From another Compose service, use `http://demo-receiver:8090/webhooks`. From
+the host, use `http://127.0.0.1:8090/webhooks`. Compose publishes the port on
+loopback only.
+
+Build and run the receiver's HTTP tests with the existing Maven wrapper
+(no Docker or PostgreSQL needed):
+
+```powershell
+.\backend\mvnw.cmd -f demo-receiver/pom.xml clean verify
+```
+
 ## Register A Webhook Endpoint
 
-With the backend running, send a JSON request from PowerShell:
+With the backend running in Compose, register the receiver by service name:
 
 ```powershell
 $body = @{
     name = "Demo receiver"
-    url = "http://localhost:8090/webhooks"
+    url = "http://demo-receiver:8090/webhooks"
 } | ConvertTo-Json
 
 $endpoint = Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/v1/webhook-endpoints -ContentType "application/json" -Body $body
@@ -118,6 +149,8 @@ disallowed destinations return HTTP `400 Bad Request`.
 
 Registration only stores the endpoint. It does not resolve the hostname,
 contact the receiver, or send a webhook; the receiver need not be running.
+For a backend running on the host, register `http://127.0.0.1:8090/webhooks`
+instead.
 
 ## Inspect Webhook Endpoints
 
@@ -406,7 +439,7 @@ memory; Docker and the operating system also need available memory.
 
 ## Local Configuration And Safety
 
-Both published ports (8080 and 5432) are bound to loopback only. The database is
+The published ports (8080, 8090, and 5432) are bound to loopback only. The database is
 named `hookfault` and persists in the `hookfault-postgres` Docker volume.
 
 The default database password, `hookfault`, is a local development placeholder,
