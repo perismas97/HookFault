@@ -5,3 +5,4 @@
 !demo-receiver/pom.xml
 !demo-receiver/src/
 **/.env*
+**/.secrets/

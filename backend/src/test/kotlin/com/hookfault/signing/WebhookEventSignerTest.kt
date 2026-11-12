@@ -8,17 +8,21 @@ import com.hookfault.events.WebhookEventType
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.assertThatThrownBy
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.ValueSource
+import org.springframework.mock.env.MockEnvironment
 import tools.jackson.databind.json.JsonMapper
 import tools.jackson.module.kotlin.KotlinModule
 import java.nio.charset.StandardCharsets.US_ASCII
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.Instant
 import java.util.HexFormat
 import java.util.UUID
 
 class WebhookEventSignerTest {
-    private val signer = WebhookEventSigner()
+    private val signer = WebhookEventSigner(DemoSigningKey(MockEnvironment()))
     private val mapper = JsonMapper.builder().addModule(KotlinModule.Builder().build()).build()
     private val serializer = WebhookEventSerializer(mapper)
     private val testKey = ByteArray(32) { it.toByte() }
@@ -32,6 +36,23 @@ class WebhookEventSignerTest {
         payload = DemoUserCreatedPayload(UUID.fromString("00000000-0000-4000-8000-000000000003"), "Demo \u03b1"),
     )
     private val event = serializer.serialize(envelope)
+
+    @Test
+    fun signsUsingTheConfiguredDemoKey(@TempDir directory: Path) {
+        val file = Files.write(directory.resolve("demo-signing-key"), testKey)
+        val environment = MockEnvironment().withProperty("HOOKFAULT_DEMO_SIGNING_KEY_FILE", file.toString())
+        val configuredSigner = WebhookEventSigner(DemoSigningKey(environment))
+
+        assertThat(configuredSigner.sign(event, sentAt).headers())
+            .isEqualTo(signer.sign(event, testKey, sentAt).headers())
+    }
+
+    @Test
+    fun refusesConfiguredSigningWithoutAKey() {
+        assertThatThrownBy { signer.sign(event, sentAt) }
+            .isInstanceOf(IllegalStateException::class.java)
+            .hasMessage("Demo signing key is not configured.")
+    }
 
     @Test
     fun matchesRfc4231TestCaseOne() {

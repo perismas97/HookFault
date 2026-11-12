@@ -30,6 +30,7 @@ provides Java and Maven; no separate host installation is required.
 From the repository root:
 
 ```powershell
+.\scripts\New-DemoSigningKey.ps1
 docker compose up --build
 ```
 
@@ -100,6 +101,7 @@ with its own executable JAR and no database dependency. To start only the
 receiver, without starting the backend or PostgreSQL:
 
 ```powershell
+.\scripts\New-DemoSigningKey.ps1
 docker compose up --build -d demo-receiver
 Invoke-RestMethod http://127.0.0.1:8090/actuator/health
 curl.exe -i -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8090/webhooks
@@ -301,6 +303,31 @@ independently of the event's `schemaVersion`. The returned `SignedWebhookEvent`
 holds both the headers and the serialized event so the same body can be used
 without re-encoding it. A retry can sign the original body with a new send
 timestamp; it retains the original event ID and `occurredAt`.
+
+### Shared Demo Signing Key
+
+Run the key generator before starting Compose. It creates
+`.secrets/demo-signing-key` with 32 cryptographically random raw bytes, prints
+no key material, and leaves an existing key unchanged. On Linux or macOS, the
+equivalent is:
+
+```sh
+(umask 077; mkdir -p .secrets && set -C && openssl rand 32 > .secrets/demo-signing-key)
+```
+
+Compose mounts this same file into the backend and receiver as
+`/run/secrets/demo_signing_key`. The `HOOKFAULT_DEMO_SIGNING_KEY_FILE`
+environment variable contains only the path. The secret directory is ignored
+by Git and excluded from the Docker build contexts. Keep the file local, do
+not put it in HTTP headers, and never reuse production credentials for this lab.
+
+For direct launches outside Compose, set `HOOKFAULT_DEMO_SIGNING_KEY_FILE` to
+the local file path in both processes. A configured file must be readable and
+exactly 32 bytes; otherwise startup fails without logging its contents. If the
+setting is absent, both apps can start, but configured signing is unavailable.
+The backend signer can use the loaded key with `sign(event, sentAt)`. The
+receiver loads the key but still rejects unverified deliveries with `503`.
+Recreate both containers after replacing the key so both load the new bytes.
 
 ## Destination And Request Policy
 

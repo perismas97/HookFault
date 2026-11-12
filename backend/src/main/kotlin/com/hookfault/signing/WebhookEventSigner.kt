@@ -12,7 +12,10 @@ private const val HMAC_SHA_256 = "HmacSHA256"
 private const val MIN_SIGNING_SECRET_BYTES = 32
 
 @Component
-class WebhookEventSigner {
+class WebhookEventSigner(private val demoSigningKey: DemoSigningKey) {
+    fun sign(event: SerializedWebhookEvent, sentAt: Instant): SignedWebhookEvent =
+        sign(event, demoSigningKey.requireBytes(), sentAt)
+
     fun sign(event: SerializedWebhookEvent, secret: ByteArray, sentAt: Instant): SignedWebhookEvent {
         require(secret.size >= MIN_SIGNING_SECRET_BYTES) { "Signing secret must contain at least 32 bytes" }
         val timestamp = sentAt.epochSecond

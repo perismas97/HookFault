@@ -24,6 +24,9 @@ services:
       HOOKFAULT_DATABASE_URL: jdbc:postgresql://postgres:5432/hookfault
       HOOKFAULT_DATABASE_USERNAME: hookfault
       HOOKFAULT_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-hookfault}
+      HOOKFAULT_DEMO_SIGNING_KEY_FILE: /run/secrets/demo_signing_key
+    secrets:
+      - demo_signing_key
     ports:
       - "127.0.0.1:8080:8080"
     depends_on:
@@ -36,9 +39,16 @@ services:
       dockerfile: demo-receiver/Dockerfile
     environment:
       SERVER_ADDRESS: 0.0.0.0
+      HOOKFAULT_DEMO_SIGNING_KEY_FILE: /run/secrets/demo_signing_key
+    secrets:
+      - demo_signing_key
     ports:
       - "127.0.0.1:8090:8090"
 
 volumes:
   hookfault-postgres:
     name: hookfault-postgres
+
+secrets:
+  demo_signing_key:
+    file: ./.secrets/demo-signing-key
