@@ -107,9 +107,8 @@ Invoke-RestMethod http://127.0.0.1:8090/actuator/health
 curl.exe -i -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8090/webhooks
 ```
 
-The health endpoint reports `UP`. The POST intentionally returns
-`503 Service Unavailable`: unverified events are not processed, even when
-signature headers are present. The receiver reads raw bytes without parsing
+The health endpoint reports `UP`. With the demo key configured, the unsigned
+POST returns `401 Unauthorized`. The receiver reads raw bytes without parsing
 the JSON and returns `413` for bodies larger than 16 KiB, including chunked
 bodies. It does not log, echo, or persist the body or signing headers.
 
@@ -325,9 +324,27 @@ For direct launches outside Compose, set `HOOKFAULT_DEMO_SIGNING_KEY_FILE` to
 the local file path in both processes. A configured file must be readable and
 exactly 32 bytes; otherwise startup fails without logging its contents. If the
 setting is absent, both apps can start, but configured signing is unavailable.
-The backend signer can use the loaded key with `sign(event, sentAt)`. The
-receiver loads the key but still rejects unverified deliveries with `503`.
+The backend signer can use the loaded key with `sign(event, sentAt)`.
 Recreate both containers after replacing the key so both load the new bytes.
+
+### Receiver Verification
+
+The receiver requires exactly one of each signing header. The timestamp must
+be a nonnegative decimal Unix second with no leading zeros (except `0`).
+It must be within 300 seconds of the receiver's current Unix second, including
+both boundaries. The receiver computes the HMAC over the raw body using the
+format above and compares the two 32-byte digests with `MessageDigest.isEqual`.
+
+| Result | Response |
+| --- | --- |
+| Valid signature and timestamp | `204 No Content` |
+| Missing, duplicate, or malformed headers; invalid signature; timestamp outside the window | `401 Unauthorized` |
+| No signing key configured | `503 Service Unavailable` |
+| Body over 16 KiB | `413 Content Too Large` |
+
+A `204` acknowledges verification only. It does not parse or store the event.
+The timestamp window limits the age of accepted requests; it does not
+deduplicate deliveries within the window.
 
 ## Destination And Request Policy
 

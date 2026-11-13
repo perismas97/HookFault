@@ -33,7 +33,7 @@ class DemoReceiverHttpTest @Autowired constructor(private val objectMapper: Obje
     @ValueSource(booleans = [false, true])
     fun readsRawBytesAtTheLimitButRejectsUnverifiedRequests(chunked: Boolean) {
         val response = post(ByteArray(16 * 1024) { 'x'.code.toByte() }, chunked)
-        assertProblem(response, 503, "Webhook verification is not enabled.")
+        assertProblem(response, 503, "Webhook verification is unavailable.")
     }
 
     @ParameterizedTest
@@ -56,7 +56,7 @@ class DemoReceiverHttpTest @Autowired constructor(private val objectMapper: Obje
                 .build(),
         )
 
-        assertProblem(response, 503, "Webhook verification is not enabled.")
+        assertProblem(response, 503, "Webhook verification is unavailable.")
         assertThat(response.body()).doesNotContain("not-for-echo", signature, timestamp)
     }
 

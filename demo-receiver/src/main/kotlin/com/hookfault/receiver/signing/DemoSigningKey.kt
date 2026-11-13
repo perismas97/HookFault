@@ -16,7 +16,9 @@ class DemoSigningKey(environment: Environment) {
     private val bytes = environment.getProperty(DEMO_KEY_FILE)?.let(::readKey)
 
     fun requireBytes(): ByteArray =
-        checkNotNull(bytes) { "Demo signing key is not configured." }.copyOf()
+        checkNotNull(bytesOrNull()) { "Demo signing key is not configured." }
+
+    internal fun bytesOrNull(): ByteArray? = bytes?.copyOf()
 
     private fun readKey(file: String): ByteArray {
         check(file.isNotBlank()) { UNREADABLE_KEY }
