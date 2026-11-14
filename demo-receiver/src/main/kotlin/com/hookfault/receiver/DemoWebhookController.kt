@@ -1,5 +1,7 @@
 package com.hookfault.receiver
 
+import com.hookfault.receiver.events.DemoEventDecoder
+import com.hookfault.receiver.events.DemoEventProcessor
 import com.hookfault.receiver.signing.WebhookSignatureVerifier
 import com.hookfault.receiver.signing.WebhookVerification
 import jakarta.servlet.http.HttpServletRequest
@@ -13,7 +15,11 @@ import org.springframework.web.bind.annotation.RestController
 internal const val MAX_WEBHOOK_BODY_BYTES = 16 * 1024
 
 @RestController
-class DemoWebhookController(private val verifier: WebhookSignatureVerifier) {
+internal class DemoWebhookController(
+    private val verifier: WebhookSignatureVerifier,
+    private val decoder: DemoEventDecoder,
+    private val processor: DemoEventProcessor,
+) {
     @PostMapping("/webhooks", consumes = [MediaType.APPLICATION_JSON_VALUE])
     fun receive(request: HttpServletRequest): ResponseEntity<ProblemDetail> {
         if (request.contentLengthLong > MAX_WEBHOOK_BODY_BYTES) {
@@ -31,7 +37,12 @@ class DemoWebhookController(private val verifier: WebhookSignatureVerifier) {
             request.singleHeader("X-HookFault-Signature"),
             body,
         )) {
-            WebhookVerification.VERIFIED -> ResponseEntity.noContent().build()
+            WebhookVerification.VERIFIED -> {
+                val event = decoder.decode(body)
+                    ?: return problem(HttpStatus.BAD_REQUEST, "Invalid or unsupported webhook event.")
+                processor.process(event)
+                ResponseEntity.noContent().build()
+            }
             WebhookVerification.REJECTED -> problem(HttpStatus.UNAUTHORIZED, "Webhook authentication failed.")
             WebhookVerification.KEY_UNAVAILABLE ->
                 problem(HttpStatus.SERVICE_UNAVAILABLE, "Webhook verification is unavailable.")

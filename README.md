@@ -96,9 +96,9 @@ Do not run the containerized backend at the same time on port 8080.
 
 ## Demo Webhook Receiver
 
-The receiver is a separate Kotlin/Spring Boot application in `demo-receiver/`,
-with its own executable JAR and no database dependency. To start only the
-receiver, without starting the backend or PostgreSQL:
+The receiver is a separate Kotlin/Spring Boot application in `demo-receiver/`
+with its own executable JAR. It uses the Compose PostgreSQL service, but does
+not need the backend running. To start the receiver and its database:
 
 ```powershell
 .\scripts\New-DemoSigningKey.ps1
@@ -108,16 +108,17 @@ curl.exe -i -H "Content-Type: application/json" -d '{}' http://127.0.0.1:8090/we
 ```
 
 The health endpoint reports `UP`. With the demo key configured, the unsigned
-POST returns `401 Unauthorized`. The receiver reads raw bytes without parsing
-the JSON and returns `413` for bodies larger than 16 KiB, including chunked
-bodies. It does not log, echo, or persist the body or signing headers.
+POST returns `401 Unauthorized`. The receiver reads raw bytes for signature
+verification before parsing JSON. Bodies larger than 16 KiB return `413`,
+including chunked bodies. It does not log, echo, or persist the raw body or
+signing headers.
 
 From another Compose service, use `http://demo-receiver:8090/webhooks`. From
 the host, use `http://127.0.0.1:8090/webhooks`. Compose publishes the port on
 loopback only.
 
-Build and run the receiver's HTTP tests with the existing Maven wrapper
-(no Docker or PostgreSQL needed):
+Build and run the receiver tests with the existing Maven wrapper and Docker
+Desktop running. Testcontainers starts a separate PostgreSQL database:
 
 ```powershell
 .\backend\mvnw.cmd -f demo-receiver/pom.xml clean verify
@@ -337,14 +338,23 @@ format above and compares the two 32-byte digests with `MessageDigest.isEqual`.
 
 | Result | Response |
 | --- | --- |
-| Valid signature and timestamp | `204 No Content` |
+| Valid, supported event, including an already processed delivery | `204 No Content` |
+| Valid signature and timestamp but invalid or unsupported JSON/event | `400 Bad Request` |
 | Missing, duplicate, or malformed headers; invalid signature; timestamp outside the window | `401 Unauthorized` |
 | No signing key configured | `503 Service Unavailable` |
 | Body over 16 KiB | `413 Content Too Large` |
 
-A `204` acknowledges verification only. It does not parse or store the event.
-The timestamp window limits the age of accepted requests; it does not
-deduplicate deliveries within the window.
+A valid `demo.user.created` event records a simulated welcome notification.
+The receiver applies its own Flyway migration in the `hookfault_receiver`
+schema. It stores only the identifiers and database timestamps. No real
+notification is sent.
+
+The primary key `(run_id, event_id)` survives process restarts and prevents
+retries or simultaneous requests for the same event in the same run from
+creating another notification. A single SQL statement claims the event and
+inserts the notification together; a failed write does not keep the claim.
+Both the first delivery and a valid duplicate return `204`. The timestamp
+window still applies to every delivery, including duplicates.
 
 ## Destination And Request Policy
 

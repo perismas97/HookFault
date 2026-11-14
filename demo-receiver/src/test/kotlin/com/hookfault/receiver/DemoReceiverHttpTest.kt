@@ -8,6 +8,10 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment.RANDOM_PORT
 import org.springframework.boot.test.web.server.LocalServerPort
+import org.springframework.boot.test.context.TestConfiguration
+import org.springframework.context.annotation.Bean
+import org.springframework.context.annotation.Import
+import org.springframework.jdbc.core.JdbcTemplate
 import tools.jackson.databind.ObjectMapper
 import java.io.ByteArrayInputStream
 import java.net.URI
@@ -17,13 +21,20 @@ import java.net.http.HttpRequest.BodyPublishers
 import java.net.http.HttpResponse
 import java.time.Duration
 
-@SpringBootTest(webEnvironment = RANDOM_PORT)
+@SpringBootTest(
+    webEnvironment = RANDOM_PORT,
+    properties = [
+        "spring.autoconfigure.exclude=org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration," +
+            "org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration",
+    ],
+)
+@Import(DemoReceiverHttpTest.NoDatabase::class)
 class DemoReceiverHttpTest @Autowired constructor(private val objectMapper: ObjectMapper) {
     @LocalServerPort
     private var port: Int = 0
 
     @Test
-    fun healthReportsUpWithoutADatabase() {
+    fun healthRouteRespondsInTheIsolatedHttpTest() {
         val response = send(request("/actuator/health").GET().build())
         assertThat(response.statusCode()).isEqualTo(200)
         assertThat(objectMapper.readTree(response.body()).path("status").asString()).isEqualTo("UP")
@@ -99,4 +110,13 @@ class DemoReceiverHttpTest @Autowired constructor(private val objectMapper: Obje
             .connectTimeout(Duration.ofSeconds(5))
             .build()
             .use { client -> client.send(request, HttpResponse.BodyHandlers.ofString()) }
+
+    @TestConfiguration(proxyBeanMethods = false)
+    class NoDatabase {
+        // Rejecting these requests must not require a live database connection.
+        @Bean
+        fun jdbcTemplate(): JdbcTemplate = object : JdbcTemplate() {
+            override fun afterPropertiesSet() = Unit
+        }
+    }
 }

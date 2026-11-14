@@ -40,10 +40,16 @@ services:
     environment:
       SERVER_ADDRESS: 0.0.0.0
       HOOKFAULT_DEMO_SIGNING_KEY_FILE: /run/secrets/demo_signing_key
+      HOOKFAULT_DATABASE_URL: jdbc:postgresql://postgres:5432/hookfault
+      HOOKFAULT_DATABASE_USERNAME: hookfault
+      HOOKFAULT_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-hookfault}
     secrets:
       - demo_signing_key
     ports:
       - "127.0.0.1:8090:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
 volumes:
   hookfault-postgres:
