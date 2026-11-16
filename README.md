@@ -356,6 +356,36 @@ inserts the notification together; a failed write does not keep the claim.
 Both the first delivery and a valid duplicate return `204`. The timestamp
 window still applies to every delivery, including duplicates.
 
+### Inspect And Reset A Demo Run
+
+Use the event's `runId` to inspect or clear only that run on the demo receiver:
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `/demo/runs/{runId}` | `200` with `runId`, `processedEventCount`, and `welcomeNotificationCount` |
+| DELETE | `/demo/runs/{runId}` | `204` after clearing both counts and the underlying rows for that run |
+
+A valid but unknown run returns zero counts. Resetting it is a no-op. An invalid
+UUID returns `400`. There is no bulk reset. Use these endpoints only on the local
+demo receiver; they are not authenticated.
+
+For example, use the following PowerShell commands with the UUID of your test run:
+
+```powershell
+$runId = '00000000-0000-4000-8000-000000000002'
+$runUrl = "http://127.0.0.1:8090/demo/runs/$runId"
+Invoke-RestMethod $runUrl
+# Delete this run's receiver state only:
+Invoke-RestMethod -Method Delete $runUrl
+Invoke-RestMethod $runUrl
+```
+
+Inspection reads both counts in one database snapshot. Reset removes the
+notifications and processed IDs in one transaction. Deliveries and resets
+for the same run are serialized in PostgreSQL; a valid delivery that runs
+after reset can populate the run again. Pause deliveries before resetting
+when you want the run to stay empty.
+
 ## Destination And Request Policy
 
 The default allowlist contains these exact origins:

@@ -4,8 +4,11 @@ import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.stereotype.Component
 
 @Component
-internal class DemoEventProcessor(private val jdbc: JdbcTemplate) {
-    fun process(event: DemoUserCreated) {
+internal class DemoEventProcessor(
+    private val jdbc: JdbcTemplate,
+    private val runTransaction: ReceiverRunTransaction,
+) {
+    fun process(event: DemoUserCreated) = runTransaction.write(event.runId) {
         // Only a newly claimed event returns a row to the notification insert.
         jdbc.update(
             """

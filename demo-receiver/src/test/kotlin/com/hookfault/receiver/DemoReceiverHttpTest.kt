@@ -12,6 +12,7 @@ import org.springframework.boot.test.context.TestConfiguration
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Import
 import org.springframework.jdbc.core.JdbcTemplate
+import org.springframework.transaction.support.TransactionOperations
 import tools.jackson.databind.ObjectMapper
 import java.io.ByteArrayInputStream
 import java.net.URI
@@ -84,6 +85,18 @@ class DemoReceiverHttpTest @Autowired constructor(private val objectMapper: Obje
         assertThat(send(request("/webhooks").GET().build()).statusCode()).isEqualTo(405)
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = ["GET", "DELETE"])
+    fun rejectsInvalidRunIdsWithoutADatabase(method: String) {
+        val response = send(request("/demo/runs/1-1-1-1-1").method(method, BodyPublishers.noBody()).build())
+        assertProblem(response, 400, "Use a run ID in canonical UUID format.")
+    }
+
+    @Test
+    fun doesNotExposeABulkReset() {
+        assertThat(send(request("/demo/runs").DELETE().build()).statusCode()).isEqualTo(404)
+    }
+
     private fun post(bytes: ByteArray, chunked: Boolean): HttpResponse<String> {
         val publisher = if (chunked) {
             BodyPublishers.ofInputStream { ByteArrayInputStream(bytes) }
@@ -118,5 +131,8 @@ class DemoReceiverHttpTest @Autowired constructor(private val objectMapper: Obje
         fun jdbcTemplate(): JdbcTemplate = object : JdbcTemplate() {
             override fun afterPropertiesSet() = Unit
         }
+
+        @Bean
+        fun transactionOperations(): TransactionOperations = TransactionOperations.withoutTransaction()
     }
 }

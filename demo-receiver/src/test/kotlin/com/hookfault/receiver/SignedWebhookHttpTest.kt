@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.JdbcTemplate
 import org.springframework.test.context.DynamicPropertyRegistry
 import org.springframework.test.context.DynamicPropertySource
 import org.springframework.transaction.support.TransactionTemplate
+import tools.jackson.databind.ObjectMapper
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -35,6 +36,7 @@ class SignedWebhookHttpTest @Autowired internal constructor(
     private val jdbc: JdbcTemplate,
     private val processor: DemoEventProcessor,
     private val transactions: TransactionTemplate,
+    private val objectMapper: ObjectMapper,
 ) {
     companion object {
         private val testKey = ByteArray(32) { it.toByte() }
@@ -115,6 +117,71 @@ class SignedWebhookHttpTest @Autowired internal constructor(
     }
 
     @Test
+    fun inspectsEmptyRunsAndResetIsIdempotent() {
+        assertRunSnapshot(runId, 0, 0)
+        repeat(2) {
+            val response = send(runRequest(runId).DELETE().build())
+            assertThat(response.statusCode()).isEqualTo(204)
+            assertThat(response.body()).isEmpty()
+        }
+        assertRunSnapshot(runId, 0, 0)
+    }
+
+    @Test
+    fun resetsOnlyTheSelectedRunAndAllowsItsEventToBeProcessedAgain() {
+        val otherRun = UUID.randomUUID()
+        val first = signedRequest().build()
+        val second = signedRequest(bytes = eventBody(run = otherRun)).build()
+        assertThat(send(first).statusCode()).isEqualTo(204)
+        assertThat(send(first).statusCode()).isEqualTo(204)
+        assertThat(send(second).statusCode()).isEqualTo(204)
+        assertRunSnapshot(runId, 1, 1)
+        assertRunSnapshot(otherRun, 1, 1)
+
+        assertThat(send(runRequest(runId).DELETE().build()).statusCode()).isEqualTo(204)
+        assertRunSnapshot(runId, 0, 0)
+        assertRunSnapshot(otherRun, 1, 1)
+
+        assertThat(send(first).statusCode()).isEqualTo(204)
+        assertRunSnapshot(runId, 1, 1)
+        assertRunSnapshot(otherRun, 1, 1)
+    }
+
+    @Test
+    fun resetWaitsForAnInFlightDeliveryForTheSameRun() {
+        HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build().use { client ->
+            lateinit var reset: java.util.concurrent.CompletableFuture<HttpResponse<String>>
+            transactions.executeWithoutResult {
+                processor.process(DemoUserCreated(runId, eventId, userId))
+                reset = client.sendAsync(runRequest(runId).DELETE().build(), HttpResponse.BodyHandlers.ofString())
+
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                var waiting = false
+                while (!waiting && !reset.isDone && System.nanoTime() < deadline) {
+                    waiting = jdbc.queryForObject(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM pg_locks
+                            WHERE locktype = 'advisory' AND NOT granted
+                              AND pg_backend_pid() = ANY(pg_blocking_pids(pid))
+                        )
+                        """.trimIndent(),
+                        Boolean::class.java,
+                    ) == true
+                    if (!waiting) Thread.sleep(25)
+                }
+                assertThat(waiting).isTrue()
+                val otherRun = UUID.randomUUID()
+                assertThat(send(signedRequest(bytes = eventBody(run = otherRun)).build()).statusCode()).isEqualTo(204)
+                assertRunSnapshot(otherRun, 1, 1)
+            }
+
+            assertThat(reset.get(10, TimeUnit.SECONDS).statusCode()).isEqualTo(204)
+            assertRunSnapshot(runId, 0, 0)
+        }
+    }
+
+    @Test
     fun rollbackReleasesTheClaimAndTheNextDeliveryCanProcessIt() {
         transactions.executeWithoutResult { transaction ->
             processor.process(DemoUserCreated(runId, eventId, userId))
@@ -177,6 +244,21 @@ class SignedWebhookHttpTest @Autowired internal constructor(
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(10))
             .POST(HttpRequest.BodyPublishers.ofByteArray(bytes))
+
+    private fun runRequest(run: UUID): HttpRequest.Builder =
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:$port/demo/runs/$run"))
+            .timeout(Duration.ofSeconds(10))
+
+    private fun assertRunSnapshot(run: UUID, events: Long, notifications: Long) {
+        val response = send(runRequest(run).GET().build())
+        assertThat(response.statusCode()).isEqualTo(200)
+        assertThat(response.headers().firstValue("Cache-Control")).contains("no-store")
+        val snapshot = objectMapper.readTree(response.body())
+        assertThat(snapshot.propertyNames()).containsExactlyInAnyOrder("runId", "processedEventCount", "welcomeNotificationCount")
+        assertThat(snapshot.path("runId").asString()).isEqualTo(run.toString())
+        assertThat(snapshot.path("processedEventCount").asLong()).isEqualTo(events)
+        assertThat(snapshot.path("welcomeNotificationCount").asLong()).isEqualTo(notifications)
+    }
 
     private fun send(request: HttpRequest): HttpResponse<String> =
         HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build()
