@@ -9,8 +9,9 @@ events, invalid signatures, and temporary delivery failures.
 
 The current version supports webhook endpoint registration and paginated
 inspection, a local destination allowlist, consistent API errors, Swagger UI,
-bounded HTTP request bodies, a versioned event model, and a PostgreSQL schema
-managed by Flyway. A standalone demo receiver exposes a local webhook route.
+bounded signed HTTP delivery, a versioned event model, and a PostgreSQL schema
+managed by Flyway. A standalone demo receiver verifies signatures and timestamps,
+processes duplicate events idempotently, and exposes run-scoped inspection/reset.
 
 ## Stack
 
@@ -386,6 +387,30 @@ for the same run are serialized in PostgreSQL; a valid delivery that runs
 after reset can populate the run again. Pause deliveries before resetting
 when you want the run to stay empty.
 
+## Signed Webhook Delivery
+
+`WebhookDeliveryClient.deliver(url, signedEvent)` sends a single HTTP POST with
+the exact serialized event bytes and its `X-HookFault-Timestamp` and
+`X-HookFault-Signature` headers. Sign the serialized event immediately before
+delivery using the shared demo key; the key itself is never transmitted.
+
+The client revalidates the destination on every call. It uses a 2-second
+connection timeout and a 5-second overall deadline, including reading the
+response body. Responses are limited to **16 KiB (16,384 bytes)** as bytes arrive,
+including chunked responses without `Content-Length`. Exceeding either limit
+cancels the exchange instead of waiting for the rest of the body. Redirects
+are returned as HTTP responses, never followed.
+
+The result distinguishes a complete HTTP response (status and bounded raw body)
+from `TIMEOUT`, `RESPONSE_TOO_LARGE`, or `NETWORK_ERROR`. A failure includes an
+HTTP status only if response headers were received. A `400` or `500` with a
+complete body is still an HTTP response, not a transport failure. Partial bodies
+and raw exception messages are not returned. The client does not retry.
+
+A response is HTTP evidence only: even a `2xx` does not prove that the receiver
+processed the event correctly. A timeout also does not prove that processing
+failed; inspect the receiver's run state to check the fictional side effect.
+
 ## Destination And Request Policy
 
 The default allowlist contains these exact origins:
@@ -424,8 +449,8 @@ The outbound request factory rechecks the destination, including URLs loaded
 from existing database records. The HTTP client never follows redirects, even
 to another allowed origin, and does not use system proxies. Its connection
 timeout is 2 seconds; prepared requests have a 5-second HTTP request timeout.
-These settings do not make the request timeout a deadline for consuming an
-arbitrary streamed response body.
+The delivery client additionally enforces the overall response deadline and
+byte limit described above, rather than relying on the request timeout alone.
 
 This is a local-demo policy, not a production SSRF sandbox. It trusts the
 machine's loopback configuration and Docker's hostname resolution. Only run
@@ -489,6 +514,18 @@ header, stable ordering, pagination boundaries, empty results, and invalid IDs.
 Error contract tests verify the shared response shape and that sensitive input
 is not echoed. Real HTTP tests also check the generated OpenAPI schemas and
 that Swagger UI and its assets are served successfully.
+
+Signed delivery tests also run without Docker:
+
+```powershell
+.\backend\mvnw.cmd -f backend/pom.xml "-Dtest=BoundedResponseSubscriberTest,WebhookDeliveryClientTest" test
+```
+
+They use real loopback HTTP stubs to verify signed UTF-8 bytes, HTTP errors,
+redirect rejection, exact/oversized fixed-length and chunked responses, stalled
+headers, continuously slow bodies, connection failures, truncated bodies, and
+interruption cleanup. Subscriber tests check cancellation and byte limits
+across multiple buffers, including late subscriptions after cancellation.
 
 Event tests run independently without Docker:
 
